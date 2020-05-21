@@ -46,7 +46,7 @@ def minkowski(rating1, rating2, p):
   return 0
 
 """Database of rated movies"""
-movies = Recommender('Movie_Ratings.csv')
+movies = Recommender('../datasets/Movie_Ratings.csv')
 movies = movies.read_csv()
 
 """Database of rated bands of music"""
