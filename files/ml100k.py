@@ -1,62 +1,21 @@
 import codecs
-from math import sqrt
 import multiprocessing as mp,os
-
-class Chunker(object):
-   #Iterator that yields start and end locations of a file chunk of default size 1MB.
-   @classmethod
-   def chunkify(cls,fname,size=1024*1024):
-      fileEnd = os.path.getsize(fname)
-      with open(fname,'rb') as f:
-         chunkEnd = f.tell()
-         while True:
-            chunkStart = chunkEnd
-            f.seek(size,1)
-            cls._EOC(f)
-            chunkEnd = f.tell()
-            yield chunkStart, chunkEnd - chunkStart
-            if chunkEnd >= fileEnd:
-               break
-
-   #Move file pointer to end of chunk
-   @staticmethod
-   def _EOC(f):
-      f.readline()
-
-   #read chunk
-   @staticmethod
-   def read(fname,chunk):
-      with open(fname,'rb') as f:
-         f.seek(chunk[0])
-         return f.read(chunk[1])
-
-   #iterator that splits a chunk into units
-   @staticmethod
-   def parse(chunk):
-      for line in chunk.splitlines():
-         yield chunk
+import math as mt
+import pandas as pd
+from chunker import Chunker
 
 class recommenderMl100k:
 
    def __init__(self, data, k=1, metric='pearson', n=5, cores=8):
-      """ initialize recommender
-      currently, if data is dictionary the recommender is initialized
-      to it.
-      For all other data types of data, no initialization occurs
-      k is the k value for k nearest neighbor
-      metric is which distance formula to use
-      n is the maximum number of recommendations to make"""
+      
       self.k = k
       self.n = n
       self.username2id = {}
       self.userid2name = {}
       self.productid2name = {}
       self.cores = cores
-      #
-      # The following two variables are used for Slope One
-      #
-      self.frequencies = {}
-      self.deviations = {}
+      self.path = '../datasets/ml-100k/'
+
       # for some reason I want to save the name of the metric
       self.metric = metric
       if self.metric == 'pearson':
@@ -66,6 +25,12 @@ class recommenderMl100k:
       #
       if type(data).__name__ == 'dict':
          self.data = data
+      elif self.metric == 'euclidian':
+         self.fn = self.euclidian
+      elif self.metric == 'cosine':
+         self.fn = self.cosine
+      elif self.metric == 'manhattan':
+         self.fn = self.manhattan
 
    def convertProductID2name(self, id):
       """Given product id number return product name"""
@@ -123,6 +88,68 @@ class recommenderMl100k:
             title = fields[1].strip()
             self.productid2name[mid] = title
 
+   def loadBookDB(self, path=''):
+        """loads the BX book dataset. Path is where the BX files are
+        located"""
+        self.data = {}
+        i = 0
+        #
+        # First load book ratings into self.data
+        #
+        f = codecs.open(path + "BX-Book-Ratings.csv", 'r', 'utf8')
+        for line in f:
+            i += 1
+            #separate line into fields
+            fields = line.split(';')
+            user = fields[0].strip('"')
+            book = fields[1].strip('"')
+            rating = int(fields[2].strip().strip('"'))
+            if user in self.data:
+                currentRatings = self.data[user]
+            else:
+                currentRatings = {}
+            currentRatings[book] = rating
+            self.data[user] = currentRatings
+        f.close()
+        #
+        # Now load books into self.productid2name
+        # Books contains isbn, title, and author among other fields
+        #
+        f = codecs.open(path + "BX-Books.csv", 'r', 'utf8')
+        for line in f:
+            i += 1
+            #separate line into fields
+            fields = line.split(';')
+            isbn = fields[0].strip('"')
+            title = fields[1].strip('"')
+            author = fields[2].strip().strip('"')
+            title = title + ' by ' + author
+            self.productid2name[isbn] = title
+        f.close()
+        #
+        #  Now load user info into both self.userid2name and
+        #  self.username2id
+        #
+        f = codecs.open(path + "BX-Users.csv", 'r', 'utf8')
+        for line in f:
+            i += 1
+            #print(line)
+            #separate line into fields
+            fields = line.split(';')
+            userid = fields[0].strip('"')
+            location = fields[1].strip('"')
+            if len(fields) > 3:
+                age = fields[2].strip().strip('"')
+            else:
+                age = 'NULL'
+            if age != 'NULL':
+                value = location + '  (age: ' + age + ')'
+            else:
+                value = location
+            self.userid2name[userid] = value
+            self.username2id[location] = userid
+        f.close()
+
    def process_users(self,fname,chunkStart, chunkSize):
       with open(fname, encoding="UTF-8") as f:
          f.seek(chunkStart)
@@ -133,7 +160,7 @@ class recommenderMl100k:
             self.userid2name[userid] = line
             self.username2id[line] = userid
 
-   def loadMovieLensParallel(self, path=''):
+   def loadMovieLensParallel(self):
       self.data = {}
 
       #init objects
@@ -141,7 +168,7 @@ class recommenderMl100k:
       jobs = []
 
       #create jobs
-      fname = path+"u.data"
+      fname = self.path+"u.data"
       for chunkStart,chunkSize in Chunker.chunkify(fname):
          jobs.append( pool.apply_async(self.process_data,(fname,chunkStart,chunkSize)) )
 
@@ -154,7 +181,7 @@ class recommenderMl100k:
       #init objects
       pool = mp.Pool(self.cores)
       jobs = []
-      fname = path+"u.item"
+      fname = self.path+"u.item"
       for chunkStart,chunkSize in Chunker.chunkify(fname):
          jobs.append( pool.apply_async(self.process_item,(fname,chunkStart,chunkSize)) )
 
@@ -167,7 +194,7 @@ class recommenderMl100k:
       #init objects
       pool = mp.Pool(self.cores)
       jobs = []
-      fname = path+"u.user"
+      fname = self.path+"u.user"
       for chunkStart,chunkSize in Chunker.chunkify(fname):
          jobs.append( pool.apply_async(self.process_users,(fname,chunkStart,chunkSize)) )
 
@@ -230,124 +257,57 @@ class recommenderMl100k:
          self.userid2name[userid] = line
          self.username2id[line] = userid
       f.close()
-      #print(i)
 
-   def loadBookDB(self, path=''):
-      """loads the BX book dataset. Path is where the BX files are
-      located"""
-      self.data = {}
-      i = 0
-      #
-      # First load book ratings into self.data
-      #
-      f = codecs.open(path + "u.data", 'r', 'utf8')
-      for line in f:
-         i += 1
-         # separate line into fields
-         fields = line.split(';')
-         user = fields[0].strip('"')
-         book = fields[1].strip('"')
-         rating = int(fields[2].strip().strip('"'))
-         if rating > 5:
-            print("EXCEEDING ", rating)
-         if user in self.data:
-            currentRatings = self.data[user]
-         else:
-            currentRatings = {}
-         currentRatings[book] = rating
-         self.data[user] = currentRatings
-      f.close()
-      #
-      # Now load books into self.productid2name
-      # Books contains isbn, title, and author among other fields
-      #
-      f = codecs.open(path + "BX-Books.csv", 'r', 'utf8')
-      for line in f:
-         i += 1
-         # separate line into fields
-         fields = line.split(';')
-         isbn = fields[0].strip('"')
-         title = fields[1].strip('"')
-         author = fields[2].strip().strip('"')
-         title = title + ' by ' + author
-         self.productid2name[isbn] = title
-      f.close()
-      #
-      #  Now load user info into both self.userid2name and
-      #  self.username2id
-      #
-      f = codecs.open(path + "BX-Users.csv", 'r', 'utf8')
-      for line in f:
-         i += 1
-         # separate line into fields
-         fields = line.split(';')
-         userid = fields[0].strip('"')
-         location = fields[1].strip('"')
-         if len(fields) > 3:
-            age = fields[2].strip().strip('"')
-         else:
-            age = 'NULL'
-         if age != 'NULL':
-            value = location + '  (age: ' + age + ')'
-         else:
-            value = location
-         self.userid2name[userid] = value
-         self.username2id[location] = userid
-      f.close()
-      print(i)
+   def manhattan(self, rating1, rating2):
+      """Simplest distance operation using only sums"""
 
+      distance = 0
+      for key in rating1:
+         if key in rating2:
+            distance += abs(rating1[key] - rating2[key])
+      return distance
 
-   def computeDeviations(self):
-      # for each person in the data:
-      #    get their ratings
-      for ratings in self.data.values():
-         # for each item & rating in that set of ratings:
-         for (item, rating) in ratings.items():
-            self.frequencies.setdefault(item, {})
-            self.deviations.setdefault(item, {})
-            # for each item2 & rating2 in that set of ratings:
-            for (item2, rating2) in ratings.items():
-               if item != item2:
-                  # add the difference between the ratings to our
-                  # computation
-                  self.frequencies[item].setdefault(item2, 0)
-                  self.deviations[item].setdefault(item2, 0.0)
-                  self.frequencies[item][item2] += 1
-                  self.deviations[item][item2] += rating - rating2
+   def euclidian(self, rating1, rating2):
+      """Usual triangular distance"""
 
-      for (item, ratings) in self.deviations.items():
-         for item2 in ratings:
-            ratings[item2] /= self.frequencies[item][item2]
+      distance = 0
+      for key in rating1:
+         if key in rating2:
+            distance += pow(rating1[key] - rating2[key],2)
+      return mt.sqrt(distance)
 
+   def minkowski(self, rating1, rating2, p):
+      """Generalization of manhattan and euclidian distances"""
 
-   def slopeOneRecommendations(self, userRatings):
-      recommendations = {}
-      frequencies = {}
-      # for every item and rating in the user's recommendations
-      for (userItem, userRating) in userRatings.items():
-         # for every item in our dataset that the user didn't rate
-         for (diffItem, diffRatings) in self.deviations.items():
-            if diffItem not in userRatings and \
-               userItem in self.deviations[diffItem]:
-               freq = self.frequencies[diffItem][userItem]
-               recommendations.setdefault(diffItem, 0.0)
-               frequencies.setdefault(diffItem, 0)
-               # add to the running sum representing the numerator
-               # of the formula
-               recommendations[diffItem] += (diffRatings[userItem] +
-                                             userRating) * freq
-               # keep a running sum of the frequency of diffitem
-               frequencies[diffItem] += freq
-      recommendations =  [(self.convertProductID2name(k),
-                           v / frequencies[k])
-                          for (k, v) in recommendations.items()]
-      # finally sort and return
-      recommendations.sort(key=lambda artistTuple: artistTuple[1],
-                           reverse = True)
-      # I am only going to return the first 50 recommendations
-      return recommendations[:50]
+      distance = 0
+      for key in rating1:
+         if key in rating2:
+            distance += pow(abs(rating1[key] - rating2[key]),p)
+      if distance != 0:
+         return pow(distance, 1/p)
+      return 0
+
+   def cosine(self, rating1, rating2):
+      """Similarity for sparse ratings"""
+
+      prod_xy = 0
+      len_vx = 0
+      len_vy = 0
+
+      for key in rating1:
+         if key in rating2:
+            prod_xy += rating1[key] * rating2[key]
+            len_vx += rating1[key] * rating1[key]
+            len_vy += rating2[key] * rating2[key]
+
+      dem = mt.sqrt(len_vx) * mt.sqrt(len_vy)
+      if dem != 0:
+         return prod_xy / dem
+      return -1
 
    def pearson(self, rating1, rating2):
+      """Similarity between two users"""
+
       sum_xy = 0
       sum_x = 0
       sum_y = 0
@@ -367,8 +327,8 @@ class recommenderMl100k:
       if n == 0:
          return 0
       # now compute denominator
-      denominator = sqrt(sum_x2 - pow(sum_x, 2) / n) * \
-                    sqrt(sum_y2 - pow(sum_y, 2) / n)
+      denominator = mt.sqrt(sum_x2 - pow(sum_x, 2) / n) * \
+                    mt.sqrt(sum_y2 - pow(sum_y, 2) / n)
       if denominator == 0:
          return 0
       else:
@@ -430,5 +390,50 @@ class recommenderMl100k:
       # finally sort and return
       recommendations.sort(key=lambda artistTuple: artistTuple[1],
                            reverse = True)
-      return recommendations
+      return recommendations[:self.n]
 
+   def ProjectedRanting(self, user, key):
+
+      # first get list of users  ordered by nearness
+      nearest = self.computeNearestNeighbor(user)
+
+      projtRating = 0
+      #
+      # determine the total distance
+      totalDistance = 0.0
+      for i in range(self.k):
+         totalDistance += nearest[i][1]
+      # now iterate through the k nearest neighbors
+      # accumulating their ratings
+      for i in range(self.k):
+         # compute slice of pie 
+         weight = nearest[i][1] / totalDistance
+
+         name = nearest[i][0]
+
+         projtRating += weight * self.data[name][key]
+         
+      return projtRating
+
+   def jaccard(self, rating1, rating2):
+      """Similarity of number of coincidences between ratings"""
+      """returning similarity and distance"""
+
+      union = set()
+      for i in rating1.keys():
+         union.add(i)
+      for i in rating2.keys():
+         union.add(i)
+
+
+      dif = 0
+      same = len(union)
+
+      for key in union:
+         if (key in rating1) and (key in rating2):
+            dif += 1
+    
+      simil = dif/same
+      dist = 1-simil
+
+      return simil,dist

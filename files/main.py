@@ -1,16 +1,20 @@
-import ml100k
+from ml100k import recommenderMl100k
 import time as tm
+from distances import recommender
 
-r = ml100k.recommenderMl100k(0)
-total_time = 0
-for i in range(10):
-  start_time = tm.time()
-  r.loadMovieLensParallel('../datasets/ml-100k/')
-  total_time += tm.time() - start_time
-print(total_time/10)
-total_time = 0
-for i in range(10):
-  start_time = tm.time()
-  r.loadMovieLens('../datasets/ml-100k/')
-  total_time += tm.time() - start_time
-print(total_time/10)
+s = recommender(0)
+s.readMovies()
+
+'''
+s = recommender(0,k=3,metric='manhattan')
+s.readBooks()
+#print(s.jaccard(s.data['Stephen'],s.data['Amy']))
+print(s.ProjectedRanting('Patrick C','Scarface'))
+'''
+'''
+r = recommenderMl100k(0,metric='cosine')
+r.loadMovieLens('../datasets/ml-100k/')
+#print(r.cosine(r.data['278833"'],r.data['278858"']))
+#print(r.jaccard(r.data['278804'],r.data['211']))
+print(r.computeNearestNeighbor("100"))
+'''
